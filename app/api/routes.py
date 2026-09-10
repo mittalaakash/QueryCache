@@ -9,6 +9,7 @@ from pathlib import Path
 
 from fastapi import APIRouter, Request, Response
 from fastapi.responses import FileResponse, StreamingResponse
+from pydantic import BaseModel
 
 from app.core.embeddings import embedder
 from app.db import repository
@@ -21,7 +22,14 @@ logger = logging.getLogger("rag_app")
 router = APIRouter()
 
 DOCUMENTS_DIR = Path("documents")
+DOCUMENTS_DIR.mkdir(exist_ok=True)
 langfuse_handler = get_langfuse_handler()
+
+
+class DocumentUpsert(BaseModel):
+    title: str
+    content: str
+    path: str | None = None
 
 
 def _sse(event: dict) -> str:
@@ -72,21 +80,22 @@ def get_document_content(path: str):
     resolved = file_path.resolve()
     if not resolved.is_relative_to(DOCUMENTS_DIR.resolve()) or not resolved.is_file():
         return Response(status_code=404, content="not found")
+    file_path = DOCUMENTS_DIR / resolved.relative_to(DOCUMENTS_DIR.resolve())
     return {"path": path, "content": file_path.read_text()}
 
 
 @router.post("/documents")
-async def upsert_document(req: Request):
+def upsert_document(body: DocumentUpsert, req: Request):
     conn = req.app.state.db_conn
-    body = await req.json()
-    title, content = body["title"], body["content"]
-    existing_path = body.get("path")
+    title, content = body.title, body.content
+    existing_path = body.path
 
     if existing_path:
         path = Path(existing_path)
         resolved = path.resolve()
         if not resolved.is_relative_to(DOCUMENTS_DIR.resolve()) or not resolved.is_file():
             return Response(status_code=400, content="invalid path")
+        path = DOCUMENTS_DIR / resolved.relative_to(DOCUMENTS_DIR.resolve())
     else:
         path = DOCUMENTS_DIR / _safe_filename(title)
 

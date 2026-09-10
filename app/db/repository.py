@@ -42,7 +42,7 @@ def replace_chunks(
                 INSERT INTO chunks (document_id, chunk_index, content, embedding)
                 VALUES (%s, %s, %s, %s)
                 """,
-                [(document_id, i, c, e) for i, (c, e) in enumerate(zip(chunks, embeddings))],
+                [(document_id, i, c, e) for i, (c, e) in enumerate(zip(chunks, embeddings, strict=True))],
             )
 
 

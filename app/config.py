@@ -1,6 +1,12 @@
 """Typed, validated app configuration loaded from environment variables / .env."""
 
+from dotenv import load_dotenv
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+# pydantic-settings reads .env into the Settings object only — it does NOT
+# export those values into os.environ. Anything that reads credentials from
+# os.environ directly (e.g. langfuse.langchain.CallbackHandler()) needs this.
+load_dotenv()
 
 
 class Settings(BaseSettings):

@@ -62,6 +62,10 @@ def sync_documents(conn, embed_fn: EmbedFn, documents_dir: Path) -> dict:
     disk_paths = {str(p) for p in paths}
 
     counts = {"insert": 0, "update": 0, "skip": 0}
+    if not paths:
+        logger.warning("no documents found in %s — skipping delete phase", documents_dir)
+        return {**counts, "delete": 0}
+
     for path in paths:
         action = ingest_file(conn, embed_fn, path)
         counts[action] += 1

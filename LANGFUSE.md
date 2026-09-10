@@ -1,19 +1,15 @@
 # Adding LLM observability with Langfuse
 
-This is the self-hostable alternative to the LangSmith setup in
-`OBSERVABILITY.md`. Langfuse ships its own LangChain callback handler, so it
-works the same way: no changes to the RAG pipeline's logic, just a callback
-wired into the `config` dict passed to the `ChatOllama.astream(...)` call in
-`app/rag/generation.py`.
-
-Both integrations can run at once — LangSmith traces via env vars
-automatically, Langfuse traces via the explicit `langfuse_handler` built in
+Langfuse is the single tracing path in this app (see `OBSERVABILITY.md`).
+Langfuse ships its own LangChain callback handler: no changes to the RAG
+pipeline's logic, just a callback wired into the `config` dict passed to the
+`ChatOllama.astream(...)` call in `app/rag/generation.py`, built once in
 `app/observability/tracing.py` and passed through `app/api/routes.py` →
-`stream_query(...)`. Nothing here disables the other.
+`stream_query(...)`.
 
 ## 1. What you get
 
-Same shape as the LangSmith trace: one trace per `POST /query` call that
+One trace per `POST /query` call that
 misses the semantic cache, containing a single span for the `llama3.2`
 chat completion, showing the exact RAG prompt (question + retrieved chunks)
 sent to Ollama, the completion, latency, and token usage. There's no
@@ -30,16 +26,16 @@ the callback handler, so it never appears as a span either way.
    (EU region; US/Japan/HIPAA regions also exist — see step 4).
    Self-hosting (Docker Compose, Kubernetes, AWS/Azure/GCP) is documented at
    https://langfuse.com/self-hosting if you want traces to stay on your own
-   infra instead — that's the actual reason to pick Langfuse over LangSmith.
+   infra instead.
 2. Create a project (e.g. `rag-app`).
 3. Grab the public key (`pk-lf-...`) and secret key (`sk-lf-...`) from
    Project Settings → API Keys.
 
 ## 3. Install the library
 
-Already added to `requirements.txt` — `langfuse` (the SDK) plus `langchain`
-(the LangChain callback integration imports the full `langchain` package,
-not just `langchain-core`, which this repo already depended on):
+Already added to `requirements.txt` — `langfuse` (the SDK), which uses the
+`langchain-core` this repo already depends on for its callback integration
+(plain `langchain` is not a dependency):
 
 ```bash
 pip install -r requirements.txt
@@ -56,12 +52,16 @@ cp .env.example .env
 regions: `https://us.cloud.langfuse.com`, `https://jp.cloud.langfuse.com`,
 `https://hipaa.cloud.langfuse.com` — or your own self-hosted URL.
 
-`app/api/routes.py` already builds a `langfuse_handler = get_langfuse_handler()`
-at import time (`app/observability/tracing.py`) and passes it as
-`callbacks=[langfuse_handler]` into `stream_query(...)` on every `POST /query`
-call. If the keys aren't set, the client just logs a warning and sends
-nothing — the app still runs fine (same "off by default" behavior as the
-LangSmith setup).
+`app/config.py` calls `load_dotenv()` at import time, which exports `.env`
+into `os.environ` (this is required — `pydantic-settings` reads `.env` into
+`app.config.settings` but does not export it to `os.environ`, and the
+Langfuse `CallbackHandler()` reads its credentials from `os.environ`
+directly). `app/api/routes.py` then builds a
+`langfuse_handler = get_langfuse_handler()` at import time
+(`app/observability/tracing.py`) and passes it as `callbacks=[langfuse_handler]`
+into `stream_query(...)` on every `POST /query` call. If the keys aren't
+set, the client just logs a warning and sends nothing — the app still runs
+fine, tracing is simply off.
 
 Then run the app as usual:
 
