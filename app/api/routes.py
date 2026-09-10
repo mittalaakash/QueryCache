@@ -66,13 +66,30 @@ def list_documents(req: Request):
     return repository.list_documents(req.app.state.db_conn)
 
 
+@router.get("/documents/content")
+def get_document_content(path: str):
+    file_path = Path(path)
+    resolved = file_path.resolve()
+    if not resolved.is_relative_to(DOCUMENTS_DIR.resolve()) or not resolved.is_file():
+        return Response(status_code=404, content="not found")
+    return {"path": path, "content": file_path.read_text()}
+
+
 @router.post("/documents")
 async def upsert_document(req: Request):
     conn = req.app.state.db_conn
     body = await req.json()
     title, content = body["title"], body["content"]
+    existing_path = body.get("path")
 
-    path = DOCUMENTS_DIR / _safe_filename(title)
+    if existing_path:
+        path = Path(existing_path)
+        resolved = path.resolve()
+        if not resolved.is_relative_to(DOCUMENTS_DIR.resolve()) or not resolved.is_file():
+            return Response(status_code=400, content="invalid path")
+    else:
+        path = DOCUMENTS_DIR / _safe_filename(title)
+
     path.write_text(content)
 
     action = ingest_file(conn, embedder.embed_documents, path)

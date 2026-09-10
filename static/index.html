@@ -34,12 +34,14 @@
 <input id="title" type="text" placeholder="Title" />
 <textarea id="content" placeholder="Markdown content..."></textarea>
 <button id="save">Save &amp; ingest</button>
+<button id="newDoc" type="button">New document</button>
 <div id="saveStatus"></div>
 
 <script>
 const answerBox = document.getElementById('answer');
 const sourcesBox = document.getElementById('sources');
 const docList = document.getElementById('docList');
+let editingPath = null;
 
 async function loadDocuments() {
   const res = await fetch('/documents');
@@ -48,9 +50,21 @@ async function loadDocuments() {
     const li = document.createElement('li');
     const b = document.createElement('b');
     b.textContent = d.title;
-    li.append(b, document.createTextNode(` — ${d.path} (updated ${d.updated_at})`));
+    const editBtn = document.createElement('button');
+    editBtn.textContent = 'Edit';
+    editBtn.onclick = () => loadForEdit(d.path);
+    li.append(b, document.createTextNode(` — ${d.path} (updated ${d.updated_at}) `), editBtn);
     return li;
   }));
+}
+
+async function loadForEdit(path) {
+  const res = await fetch(`/documents/content?path=${encodeURIComponent(path)}`);
+  if (!res.ok) return;
+  const body = await res.json();
+  document.getElementById('content').value = body.content;
+  editingPath = path;
+  document.getElementById('saveStatus').textContent = `Editing ${path}`;
 }
 
 async function ask() {
@@ -96,18 +110,30 @@ document.getElementById('ask').onclick = ask;
 document.getElementById('save').onclick = async () => {
   const title = document.getElementById('title').value;
   const content = document.getElementById('content').value;
-  if (!title || !content) return;
+  if (!content || (!editingPath && !title)) return;
 
   const status = document.getElementById('saveStatus');
   status.textContent = 'Saving...';
+  const payload = { title, content };
+  if (editingPath) payload.path = editingPath;
   const res = await fetch('/documents', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ title, content }),
+    body: JSON.stringify(payload),
   });
   const body = await res.json();
   status.textContent = `Saved (${body.action}).`;
+  editingPath = null;
+  document.getElementById('title').value = '';
+  document.getElementById('content').value = '';
   loadDocuments();
+};
+
+document.getElementById('newDoc').onclick = () => {
+  editingPath = null;
+  document.getElementById('title').value = '';
+  document.getElementById('content').value = '';
+  document.getElementById('saveStatus').textContent = '';
 };
 
 loadDocuments();
