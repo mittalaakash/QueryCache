@@ -1,100 +1,54 @@
-# Adding LLM observability with LangSmith — from scratch
+# Observability
 
-This app is built on LangChain (`ChatOllama`) and LangGraph. Both are made by
-the LangChain team and report every run to **LangSmith** automatically once
-it's turned on — no manual instrumentation code needed. That's the appeal
-over a generic tracer: you get prompt/completion text, token counts, latency,
-and the full graph-node waterfall for free, specifically because your stack
-already speaks LangChain's tracing protocol.
+This app has three observability paths, all already wired up:
 
-## 1. What you get
+1. **Langfuse** — LLM tracing (prompts, completions, latency, token usage).
+   See `LANGFUSE.md` for setup.
+2. **Structured logging** — via `app/observability/logging_config.py`.
+3. **Prometheus metrics** — exposed at `GET /metrics`, via
+   `app/observability/metrics.py`.
 
-- One **trace per top-level call** (`graph.astream(...)` in `main.py`),
-  containing a **child run per LangGraph node** (`planner`, `budget_agent`,
-  `itinerary_agent`, `human_review`, `booking`) automatically, because
-  LangGraph reports each node execution as a run.
-- Inside each node's LLM call, a further child run with the exact prompt sent
-  to Ollama, the completion returned, latency, and token usage.
-- A pause/resume on `human_review` (via `interrupt`) shows up as two separate
-  runs against the same thread — you can see the state right before the
-  interrupt and the state the resume produced.
+`langgraph`/`langsmith` are not part of this app — Langfuse is the single
+tracing path (see `requirements.txt`; neither package is listed there).
 
-## 2. Sign up and get an API key
+## 1. Langfuse tracing
 
-1. Create an account at https://smith.langchain.com (free tier is enough for
-   this).
-2. Create a project (e.g. `trip-planner`) — or just let LangSmith create one
-   from the env var below on first run.
-3. Grab an API key from Settings → API Keys.
+`app/api/routes.py` builds a `langfuse_handler = get_langfuse_handler()` at
+import time (`app/observability/tracing.py`) and passes it as
+`callbacks=[langfuse_handler]` into `stream_query(...)` on every
+`POST /query` call.
 
-## 3. Install the library
+**Trace shape:** one trace per `POST /query` call that misses the semantic
+cache, containing a single span for the `llama3.2` chat completion
+(`ChatOllama.astream(...)` in `app/rag/generation.py`), showing the exact RAG
+prompt (question + retrieved chunks) sent to Ollama, the completion, latency,
+and token usage. Cache hits (`app/rag/cache.py`'s `lookup()` finds a match)
+skip the `ChatOllama` call entirely and so produce **no span and no
+trace** — you'll only see cache-miss queries show up in Langfuse. The query
+embedding call (`OllamaEmbeddings.embed_query`) also isn't wired to the
+callback handler, so it never appears as a span either way.
 
-Already covered — `langsmith` ships as a dependency of `langchain-core`,
-which this repo already depends on. It's pinned explicitly in
-`requirements.txt` since it's now a deliberate integration point, not just
-incidental:
+See `LANGFUSE.md` for how to sign up, get keys, and turn it on.
 
-```
-pip install -r requirements.txt
-```
+## 2. Structured logging
 
-## 4. Turn tracing on — just environment variables
+`app/observability/logging_config.py`'s `configure_logging()` sets up
+`logging.basicConfig` once at process start (`%(asctime)s %(levelname)s
+%(name)s: %(message)s`), used consistently by both the FastAPI app and the
+CLI ingestion scripts. Look for logs from the `rag_app` and `ingestion`
+loggers.
 
-No code changes needed in the graph/app logic. Copy the template and fill in
-your key:
+## 3. Prometheus metrics
 
-```bash
-cp .env.example .env
-# edit .env, set LANGSMITH_API_KEY to your real key
-```
+`GET /metrics` (`app/observability/metrics.py`) exposes:
 
-`main.py` calls `load_dotenv()` on startup (via `python-dotenv`), so
-`.env` is picked up automatically — no manual `export` needed. `.env` is
-gitignored; only `.env.example` (with a placeholder key) is meant to be
-committed.
+- `rag_queries_total` — total `POST /query` calls answered.
+- `rag_query_latency_seconds` — end-to-end query latency histogram.
+- `rag_retrieved_chunks` — chunks retrieved per query.
+- `rag_ingested_documents_total{action}` — documents processed via the UI
+  ingestion path (`POST /documents`), labeled by `insert`/`update`/`skip`.
+- `rag_cache_hits_total` / `rag_cache_misses_total` — semantic cache
+  hit/miss counts.
 
-(The older var names `LANGCHAIN_TRACING_V2` / `LANGCHAIN_API_KEY` /
-`LANGCHAIN_PROJECT` still work — LangSmith reads either set.)
-
-Then run the app as usual:
-
-```bash
-uvicorn main:app --reload
-```
-
-Every graph run now ships to your LangSmith project automatically.
-
-## 5. Look at a trace
-
-1. Trigger a run from the UI (`static/index.html` — hit **Start**).
-2. Open https://smith.langchain.com, select your project.
-3. Click the newest trace — you'll see the node waterfall
-   (`planner → budget_agent → itinerary_agent → human_review → booking`),
-   each with its LLM call, the exact prompt/completion, and latency per step.
-4. Approve/reject/edit in the UI — the resume shows up as a continuation of
-   the same run.
-
-## 6. Optional: name/tag runs for easier filtering
-
-If you want to search traces by `thread_id` later (e.g. to find "the trace
-for this specific user's trip"), pass it through as run metadata — LangGraph
-already threads `config["configurable"]["thread_id"]` into every run, so it's
-searchable in LangSmith without extra code. No changes needed here since
-`main.py` already builds `config` with `thread_id`.
-
-## 7. Turning it off
-
-Unset `LANGSMITH_TRACING` (or set it to `false`) — nothing else changes,
-since tracing here is purely environment-driven, not baked into the code.
-
-## 8. When to reach for something else
-
-- **Non-LLM parts of a larger system** (plain HTTP handlers, DB calls, queues
-  unrelated to LangChain) aren't covered by LangSmith — it only sees
-  LangChain/LangGraph runs. For full-service tracing you'd add a
-  general-purpose tracer (OpenTelemetry) alongside it.
-- **Self-hosting / data locality** — LangSmith is a hosted SaaS; your
-  prompts/completions leave the machine. If that's a blocker, **Langfuse**
-  (self-hostable, open source) has the same LangChain/LangGraph callback
-  integration and keeps traces on your own infra. It's already wired up here
-  too — see `LANGFUSE.md`.
+Point a local Prometheus (or `curl`) at `http://localhost:8000/metrics` to
+see current values.

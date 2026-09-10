@@ -1,10 +1,10 @@
 fastapi
 uvicorn[standard]
-langgraph
 langchain-ollama
 langchain-core
-langchain
-langsmith
 langfuse
 python-dotenv
-openai
+pydantic-settings
+psycopg[binary]
+pgvector
+prometheus-client

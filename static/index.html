@@ -2,71 +2,82 @@
 <html>
 <head>
 <meta charset="utf-8">
-<title>LangGraph Trip Planner (HITL demo)</title>
+<title>RAG Document Q&amp;A</title>
 <style>
-  body { font-family: system-ui, sans-serif; max-width: 720px; margin: 40px auto; padding: 0 16px; }
+  body { font-family: system-ui, sans-serif; max-width: 760px; margin: 40px auto; padding: 0 16px; }
   h1 { font-size: 1.3rem; }
-  #log { background: #f4f4f4; border-radius: 8px; padding: 12px; min-height: 100px; white-space: pre-wrap; font-size: 0.9rem; }
-  .step { margin-bottom: 10px; padding-bottom: 10px; border-bottom: 1px solid #ddd; }
-  .step b { color: #333; }
-  #review { display: none; border: 2px solid #d97706; border-radius: 8px; padding: 12px; margin-top: 16px; }
-  textarea { width: 100%; box-sizing: border-box; height: 60px; margin: 4px 0; }
-  button { margin-right: 8px; padding: 6px 14px; cursor: pointer; }
-  input[type=text] { width: 100%; box-sizing: border-box; padding: 6px; }
+  h2 { font-size: 1.05rem; margin-top: 32px; }
+  #answer { background: #f4f4f4; border-radius: 8px; padding: 12px; min-height: 60px; white-space: pre-wrap; font-size: 0.95rem; }
+  #sources { font-size: 0.85rem; color: #555; margin: 8px 0; }
+  #sources span { display: inline-block; background: #e7e7e7; border-radius: 4px; padding: 2px 8px; margin: 2px 4px 2px 0; }
+  #sources .cache-badge { background: #dcfce7; color: #166534; font-weight: 600; }
+  input[type=text], textarea { width: 100%; box-sizing: border-box; padding: 6px; }
+  textarea { height: 140px; margin: 4px 0; }
+  button { margin: 8px 0; padding: 6px 14px; cursor: pointer; }
+  #docList { font-size: 0.85rem; padding-left: 18px; }
+  #docList li { margin-bottom: 4px; }
 </style>
 </head>
 <body>
-<h1>LangGraph + Ollama trip planner (human-in-the-loop demo)</h1>
+<h1>Document Q&amp;A (RAG demo)</h1>
 
-<input id="goal" type="text" value="3 day trip to Lisbon, budget $800" />
-<button id="start">Start</button>
+<input id="question" type="text" placeholder="Ask a question about the ingested documents..." />
+<button id="ask">Ask</button>
 
-<div id="log"></div>
+<div id="sources"></div>
+<div id="answer"></div>
 
-<div id="review">
-  <h3>Human review needed</h3>
-  <div><b>Budget</b></div>
-  <textarea id="budgetEdit"></textarea>
-  <div><b>Itinerary</b></div>
-  <textarea id="itineraryEdit"></textarea>
-  <div>
-    <button id="approve">Approve</button>
-    <button id="edit">Approve with edits</button>
-    <button id="reject">Reject</button>
-  </div>
-</div>
+<h2>Documents</h2>
+<ul id="docList"></ul>
+
+<h2>Add / update a document</h2>
+<input id="title" type="text" placeholder="Title" />
+<textarea id="content" placeholder="Markdown content..."></textarea>
+<button id="save">Save &amp; ingest</button>
+<button id="newDoc" type="button">New document</button>
+<div id="saveStatus"></div>
 
 <script>
-const log = document.getElementById('log');
-const reviewBox = document.getElementById('review');
-const budgetEdit = document.getElementById('budgetEdit');
-const itineraryEdit = document.getElementById('itineraryEdit');
-let threadId;
+const answerBox = document.getElementById('answer');
+const sourcesBox = document.getElementById('sources');
+const docList = document.getElementById('docList');
+let editingPath = null;
 
-function addLine(html) {
-  const div = document.createElement('div');
-  div.className = 'step';
-  div.innerHTML = html;
-  log.appendChild(div);
-  log.scrollTop = log.scrollHeight;
+async function loadDocuments() {
+  const res = await fetch('/documents');
+  const docs = await res.json();
+  docList.replaceChildren(...docs.map(d => {
+    const li = document.createElement('li');
+    const b = document.createElement('b');
+    b.textContent = d.title;
+    const editBtn = document.createElement('button');
+    editBtn.textContent = 'Edit';
+    editBtn.onclick = () => loadForEdit(d.path);
+    li.append(b, document.createTextNode(` — ${d.path} (updated ${d.updated_at}) `), editBtn);
+    return li;
+  }));
 }
 
-function handleMessage(msg) {
-  if (msg.type === 'step') {
-    addLine(`<b>${msg.node}</b><br>${JSON.stringify(msg.data)}`);
-  } else if (msg.type === 'interrupt') {
-    addLine(`<b>human_review</b> — paused, waiting for you`);
-    budgetEdit.value = msg.data.budget;
-    itineraryEdit.value = msg.data.itinerary;
-    reviewBox.style.display = 'block';
-  } else if (msg.type === 'done') {
-    addLine(`<b>done</b><br>${JSON.stringify(msg.data)}`);
-  }
+async function loadForEdit(path) {
+  const res = await fetch(`/documents/content?path=${encodeURIComponent(path)}`);
+  if (!res.ok) return;
+  const body = await res.json();
+  document.getElementById('content').value = body.content;
+  editingPath = path;
+  document.getElementById('saveStatus').textContent = `Editing ${path}`;
 }
 
-async function streamResponse(res) {
-  const th = res.headers.get('X-Thread-Id');
-  if (th) threadId = th;
+async function ask() {
+  const question = document.getElementById('question').value;
+  if (!question) return;
+  answerBox.textContent = '';
+  sourcesBox.innerHTML = '';
+
+  const res = await fetch('/query', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ question }),
+  });
   const reader = res.body.getReader();
   const decoder = new TextDecoder();
   let buf = '';
@@ -78,34 +89,58 @@ async function streamResponse(res) {
     while ((idx = buf.indexOf('\n\n')) !== -1) {
       const raw = buf.slice(0, idx);
       buf = buf.slice(idx + 2);
-      if (raw.startsWith('data: ')) handleMessage(JSON.parse(raw.slice(6)));
+      if (!raw.startsWith('data: ')) continue;
+      const msg = JSON.parse(raw.slice(6));
+      if (msg.type === 'sources') {
+        sourcesBox.innerHTML = msg.cached ? '<span class="cache-badge">⚡ cached</span>' : '';
+        msg.data.forEach(s => {
+          const span = document.createElement('span');
+          span.textContent = s.title;
+          sourcesBox.appendChild(span);
+        });
+      } else if (msg.type === 'token') {
+        answerBox.textContent += msg.data;
+      }
     }
   }
 }
 
-document.getElementById('start').onclick = () => {
-  log.innerHTML = '';
-  reviewBox.style.display = 'none';
-  fetch('/run/start', {
+document.getElementById('ask').onclick = ask;
+
+document.getElementById('save').onclick = async () => {
+  const title = document.getElementById('title').value;
+  const content = document.getElementById('content').value;
+  if (!content || (!editingPath && !title)) return;
+
+  const status = document.getElementById('saveStatus');
+  status.textContent = 'Saving...';
+  const payload = { title, content };
+  if (editingPath) payload.path = editingPath;
+  const res = await fetch('/documents', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ goal: document.getElementById('goal').value }),
-  }).then(streamResponse);
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) {
+    status.textContent = `Save failed: ${await res.text()}`;
+    return;
+  }
+  const body = await res.json();
+  status.textContent = `Saved (${body.action}).`;
+  editingPath = null;
+  document.getElementById('title').value = '';
+  document.getElementById('content').value = '';
+  loadDocuments();
 };
 
-function resume(action, data) {
-  reviewBox.style.display = 'none';
-  fetch(`/run/${threadId}/resume`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ action, data: data || {} }),
-  }).then(streamResponse);
-}
+document.getElementById('newDoc').onclick = () => {
+  editingPath = null;
+  document.getElementById('title').value = '';
+  document.getElementById('content').value = '';
+  document.getElementById('saveStatus').textContent = '';
+};
 
-document.getElementById('approve').onclick = () => resume('approve');
-document.getElementById('reject').onclick = () => resume('reject');
-document.getElementById('edit').onclick = () =>
-  resume('edit', { budget: budgetEdit.value, itinerary: itineraryEdit.value });
+loadDocuments();
 </script>
 </body>
 </html>
