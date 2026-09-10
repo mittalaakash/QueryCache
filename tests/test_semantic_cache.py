@@ -63,3 +63,23 @@ def test_extract_cache_slots_bare_quarter_gets_implicit_year():
     assert "Q1" in slots
     assert str(TODAY.year) in slots
     assert slots == frozenset({"Q1", "2026"})
+
+
+def test_extract_cache_slots_unrelated_number_not_excluded_by_quarter_digit():
+    """Regression test: ensure numbers sharing a digit value with a quarter
+    (e.g., '3' in 'top 3' and '3' in 'Q3') are not confused.
+    The number '3' at position of 'top 3' and quarter digit '3' at position of 'Q3'
+    are different tokens at different spans and must both be tracked."""
+    with_number = extract_cache_slots("What were the top 3 customers in Q3?", TODAY)
+    without_number = extract_cache_slots("What was the revenue in Q3?", TODAY)
+
+    # With unrelated number: should have both "3" and "Q3"
+    assert "3" in with_number
+    assert "Q3" in with_number
+
+    # Without unrelated number: should have only "Q3", no "3"
+    assert "3" not in without_number
+    assert "Q3" in without_number
+
+    # They must be different (to prevent wrong cache hits)
+    assert with_number != without_number

@@ -87,23 +87,23 @@ def extract_cache_slots(query: str, today: date) -> frozenset[str]:
         full_year = 2000 + fy_year
         slots.add(str(full_year))
 
-    # Track which quarter digits we've extracted to avoid double-counting with _NUMBER_RE
-    quarter_digits = set()
+    # Track which spans (character positions) contain quarter digits to avoid excluding
+    # unrelated numbers that happen to share the same digit value (e.g., "top 3" vs "Q3").
+    # Only explicit quarter regex matches have position info, so we only track those.
+    quarter_digit_spans = set()
     for m in _EXPLICIT_QUARTER_RE.finditer(spaced_query):
         quarter_num = m.group(1)
         slots.add(f"Q{quarter_num}")
-        quarter_digits.add(quarter_num)
+        # Record the span of the digit group to exclude it from number extraction
+        quarter_digit_spans.add(m.span(1))
 
     for phrase, quarter in _QUARTER_WORDS.items():
         if phrase in lowered:
             slots.add(quarter)
-            # Extract quarter digit from string like "Q1"
-            quarter_digits.add(quarter[1])
 
     if any(phrase in lowered for phrase in _RELATIVE_QUARTER_WORDS):
         q_num = str((today.month - 1) // 3 + 1)
         slots.add(f"Q{q_num}")
-        quarter_digits.add(q_num)
 
     months_found = {
         _MONTH_NAME_TO_ABBR[w]
@@ -113,16 +113,15 @@ def extract_cache_slots(query: str, today: date) -> frozenset[str]:
     for month_set, quarter in _MONTHS_TO_QUARTER.items():
         if month_set <= months_found:
             slots.add(quarter)
-            quarter_digits.add(quarter[1])
 
     for phrase, quarter in _QUARTER_PHRASES.items():
         if phrase in lowered:
             slots.add(quarter)
-            quarter_digits.add(quarter[1])
 
     for m in _NUMBER_RE.finditer(spaced_query):
         token = m.group(0).replace(",", "")
-        if token not in explicit_years and token not in quarter_digits:
+        # Skip if it's a year or if its span matches a quarter digit's span
+        if token not in explicit_years and m.span() not in quarter_digit_spans:
             slots.add(token)
 
     # If any quarter was found but no explicit year, add today's year for consistency.
