@@ -121,6 +121,10 @@ document.getElementById('save').onclick = async () => {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(payload),
   });
+  if (!res.ok) {
+    status.textContent = `Save failed: ${await res.text()}`;
+    return;
+  }
   const body = await res.json();
   status.textContent = `Saved (${body.action}).`;
   editingPath = null;
