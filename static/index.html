@@ -44,9 +44,13 @@ const docList = document.getElementById('docList');
 async function loadDocuments() {
   const res = await fetch('/documents');
   const docs = await res.json();
-  docList.innerHTML = docs
-    .map(d => `<li><b>${d.title}</b> — ${d.path} (updated ${d.updated_at})</li>`)
-    .join('');
+  docList.replaceChildren(...docs.map(d => {
+    const li = document.createElement('li');
+    const b = document.createElement('b');
+    b.textContent = d.title;
+    li.append(b, document.createTextNode(` — ${d.path} (updated ${d.updated_at})`));
+    return li;
+  }));
 }
 
 async function ask() {
@@ -74,8 +78,12 @@ async function ask() {
       if (!raw.startsWith('data: ')) continue;
       const msg = JSON.parse(raw.slice(6));
       if (msg.type === 'sources') {
-        const badge = msg.cached ? '<span class="cache-badge">⚡ cached</span>' : '';
-        sourcesBox.innerHTML = badge + msg.data.map(s => `<span>${s.title}</span>`).join('');
+        sourcesBox.innerHTML = msg.cached ? '<span class="cache-badge">⚡ cached</span>' : '';
+        msg.data.forEach(s => {
+          const span = document.createElement('span');
+          span.textContent = s.title;
+          sourcesBox.appendChild(span);
+        });
       } else if (msg.type === 'token') {
         answerBox.textContent += msg.data;
       }
