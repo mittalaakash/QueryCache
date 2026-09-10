@@ -1,0 +1,10 @@
+fastapi
+uvicorn[standard]
+langgraph
+langchain-ollama
+langchain-core
+langchain
+langsmith
+langfuse
+python-dotenv
+openai
