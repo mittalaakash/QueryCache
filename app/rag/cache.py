@@ -22,7 +22,8 @@ from app.core.embeddings import embedder
 from app.db import repository
 
 _YEAR_RE = re.compile(r"\b(?:19|20)\d{2}\b")
-_EXPLICIT_QUARTER_RE = re.compile(r"\bq([1-4])\b", re.IGNORECASE)
+_FY_RE = re.compile(r"\bfy\s?(\d{2})\b", re.IGNORECASE)
+_EXPLICIT_QUARTER_RE = re.compile(r"\bq\s?([1-4])\b", re.IGNORECASE)
 _NUMBER_RE = re.compile(r"\b\d[\d,]*(?:\.\d+)?\b")
 
 _QUARTER_WORDS = {
@@ -57,25 +58,52 @@ _QUARTER_PHRASES = {
 }
 
 
+def _space_letter_digit_boundaries(text: str) -> str:
+    """Insert spaces at letter↔digit boundaries to help word-boundary regexes.
+    Transforms "FY2025" → "FY 2025" and "Q1FY25" → "Q1 FY 25" so that
+    \b-anchored patterns can correctly identify years/quarters."""
+    text = re.sub(r"(?<=[A-Za-z])(?=\d)", " ", text)
+    text = re.sub(r"(?<=\d)(?=[A-Za-z])", " ", text)
+    return text
+
+
 def extract_cache_slots(query: str, today: date) -> frozenset[str]:
-    lowered = query.lower()
+    # Insert spaces at letter↔digit boundaries so \b-anchored regexes work correctly.
+    spaced_query = _space_letter_digit_boundaries(query)
+    lowered = spaced_query.lower()
     slots: set[str] = set()
 
-    explicit_years = {m.group(0) for m in _YEAR_RE.finditer(query)}
+    explicit_years = {m.group(0) for m in _YEAR_RE.finditer(spaced_query)}
     slots |= explicit_years
 
     for phrase, offset in _RELATIVE_YEAR_WORDS.items():
         if phrase in lowered:
             slots.add(str(today.year + offset))
 
-    for m in _EXPLICIT_QUARTER_RE.finditer(query):
-        slots.add(f"Q{m.group(1)}")
+    # Handle fiscal years like "FY2025" or "FY25" (after spacing: "FY 2025" or "FY 25")
+    for m in _FY_RE.finditer(lowered):
+        fy_year = int(m.group(1))
+        # Convert 2-digit year to 4-digit (assumes 2000-2099)
+        full_year = 2000 + fy_year
+        slots.add(str(full_year))
+
+    # Track which quarter digits we've extracted to avoid double-counting with _NUMBER_RE
+    quarter_digits = set()
+    for m in _EXPLICIT_QUARTER_RE.finditer(spaced_query):
+        quarter_num = m.group(1)
+        slots.add(f"Q{quarter_num}")
+        quarter_digits.add(quarter_num)
+
     for phrase, quarter in _QUARTER_WORDS.items():
         if phrase in lowered:
             slots.add(quarter)
+            # Extract quarter digit from string like "Q1"
+            quarter_digits.add(quarter[1])
 
     if any(phrase in lowered for phrase in _RELATIVE_QUARTER_WORDS):
-        slots.add(f"Q{(today.month - 1) // 3 + 1}")
+        q_num = str((today.month - 1) // 3 + 1)
+        slots.add(f"Q{q_num}")
+        quarter_digits.add(q_num)
 
     months_found = {
         _MONTH_NAME_TO_ABBR[w]
@@ -85,15 +113,23 @@ def extract_cache_slots(query: str, today: date) -> frozenset[str]:
     for month_set, quarter in _MONTHS_TO_QUARTER.items():
         if month_set <= months_found:
             slots.add(quarter)
+            quarter_digits.add(quarter[1])
 
     for phrase, quarter in _QUARTER_PHRASES.items():
         if phrase in lowered:
             slots.add(quarter)
+            quarter_digits.add(quarter[1])
 
-    for m in _NUMBER_RE.finditer(query):
+    for m in _NUMBER_RE.finditer(spaced_query):
         token = m.group(0).replace(",", "")
-        if token not in explicit_years:
+        if token not in explicit_years and token not in quarter_digits:
             slots.add(token)
+
+    # If any quarter was found but no explicit year, add today's year for consistency.
+    has_quarter = any(s.startswith("Q") and len(s) == 2 for s in slots)
+    has_year = any(len(s) == 4 and s.isdigit() for s in slots)
+    if has_quarter and not has_year:
+        slots.add(str(today.year))
 
     return frozenset(slots)
 

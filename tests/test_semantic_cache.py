@@ -33,3 +33,33 @@ def test_extract_cache_slots_catches_non_date_numeric_mismatch():
     top5 = extract_cache_slots("Who are the top 5 customers?", TODAY)
     top10 = extract_cache_slots("Who are the top 10 customers?", TODAY)
     assert top5 != top10
+
+
+def test_extract_cache_slots_fiscal_year_different_years_different_slots():
+    """FY2025 and FY2026 must produce different slots (critical bug fix).
+    Ensures fiscal years like FY2025 are correctly parsed even when
+    letter-adjacent to digits (no word boundary between Y and 2)."""
+    slots_fy2025 = extract_cache_slots("Apple revenue in FY2025", TODAY)
+    slots_fy2026 = extract_cache_slots("Apple revenue in FY2026", TODAY)
+    assert slots_fy2025 != slots_fy2026
+    # Verify both correctly extracted the 4-digit years
+    assert "2025" in slots_fy2025
+    assert "2026" in slots_fy2026
+
+
+def test_extract_cache_slots_fiscal_year_short_form():
+    """Short fiscal year form FY25 (2025) must be distinguishable from FY26."""
+    slots_fy25 = extract_cache_slots("What was FY25 revenue?", TODAY)
+    slots_fy26 = extract_cache_slots("What was FY26 revenue?", TODAY)
+    assert slots_fy25 != slots_fy26
+    assert "2025" in slots_fy25
+    assert "2026" in slots_fy26
+
+
+def test_extract_cache_slots_bare_quarter_gets_implicit_year():
+    """Bare quarter 'Q1 revenue' without explicit year must include today's year.
+    Ensures 'Q1 revenue' asked in 2025 ≠ 'Q1 revenue' asked in 2026."""
+    slots = extract_cache_slots("What was Q1 revenue?", TODAY)
+    assert "Q1" in slots
+    assert str(TODAY.year) in slots
+    assert slots == frozenset({"Q1", "2026"})
