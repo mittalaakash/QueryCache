@@ -6,7 +6,7 @@ from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 
 from app.api.routes import router
-from app.db.connection import get_connection
+from app.db.connection import get_pool
 from app.db.schema import init_schema
 from app.observability.logging_config import configure_logging
 
@@ -15,11 +15,12 @@ configure_logging()
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    conn = get_connection()
-    init_schema(conn)
-    app.state.db_conn = conn
+    pool = get_pool()
+    with pool.connection() as conn:
+        init_schema(conn)
+    app.state.db_pool = pool
     yield
-    conn.close()
+    pool.close()
 
 
 app = FastAPI(lifespan=lifespan)

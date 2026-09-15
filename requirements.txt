@@ -5,6 +5,6 @@ langchain-core
 langfuse
 python-dotenv
 pydantic-settings
-psycopg[binary]
+psycopg[binary,pool]
 pgvector
 prometheus-client

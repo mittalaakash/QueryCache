@@ -54,13 +54,13 @@ def health():
 
 @router.post("/query")
 async def query(req: Request):
-    conn = req.app.state.db_conn
+    pool = req.app.state.db_pool
     body = await req.json()
     question = body["question"]
 
     async def stream():
         start = time.perf_counter()
-        async for event in stream_query(conn, question, callbacks=[langfuse_handler]):
+        async for event in stream_query(pool, question, callbacks=[langfuse_handler]):
             yield _sse(event)
         metrics.QUERY_COUNT.inc()
         metrics.QUERY_LATENCY.observe(time.perf_counter() - start)
@@ -71,7 +71,8 @@ async def query(req: Request):
 
 @router.get("/documents")
 def list_documents(req: Request):
-    return repository.list_documents(req.app.state.db_conn)
+    with req.app.state.db_pool.connection() as conn:
+        return repository.list_documents(conn)
 
 
 @router.get("/documents/content")
@@ -86,7 +87,6 @@ def get_document_content(path: str):
 
 @router.post("/documents")
 def upsert_document(body: DocumentUpsert, req: Request):
-    conn = req.app.state.db_conn
     title, content = body.title, body.content
     existing_path = body.path
 
@@ -101,11 +101,14 @@ def upsert_document(body: DocumentUpsert, req: Request):
 
     path.write_text(content)
 
-    action = ingest_file(conn, embedder.embed_documents, path)
+    with req.app.state.db_pool.connection() as conn:
+        action = ingest_file(conn, embedder.embed_documents, path)
+        documents = repository.list_documents(conn)
+
     metrics.INGESTED_DOCUMENTS.labels(action=action).inc()
     logger.info("document %s via UI path=%s", action, path)
 
-    return {"action": action, "documents": repository.list_documents(conn)}
+    return {"action": action, "documents": documents}
 
 
 @router.get("/metrics")
